@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <link rel="stylesheet" href="../static/styles/home.css">
+</head>
+<body>
+    <div class="container">
+        <div id="chat-container">
+            <div id="chat">
+                
+            </div>
+            <form action="/chat" method="post">
+                <div class="">
+                    <input type="text" name="userMessage" id="user-input" placeholder="Type your question here...">
+                    <button type="submit" id="send-button">Send</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            var historyJson = '{{.History}}';
+        
+            if (historyJson) {
+                var history = JSON.parse(historyJson);
+                var chatContainer = document.getElementById('chat');
+        
+                history.forEach(function (message) {
+                    var messageDiv = document.createElement('div');
+                    messageDiv.className = 'message-container ' + (message.role === 'user' ? 'user-message' : 'ai-message');
+        
+                    var img = document.createElement('img');
+                    img.src = message.role === 'user' ? '../static/images/user-icon.png' : '../static/images/gpt-icon.png';
+                    img.alt = message.role === 'user' ? 'User Icon' : 'GPT Icon';
+        
+                    var messageContent = document.createElement('div');
+                    messageContent.className = 'message';
+                    messageContent.innerHTML = '<span>' + message.content + '</span>';
+        
+                    messageDiv.appendChild(img);
+                    messageDiv.appendChild(messageContent);
+        
+                    chatContainer.appendChild(messageDiv);
+                });
+            }
+        });               
+    </script> 
+</body>
+</html>
