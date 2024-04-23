@@ -1,41 +1,19 @@
 package cmd
 
 import (
+	"Ex2_Week3/db"
 	"context"
-	"encoding/gob"
 	"encoding/json"
-	"fmt"
 	"net/http"
-
-	"github.com/google/uuid"
-	"github.com/gorilla/sessions"
+	
+	"gopkg.in/mgo.v2/bson"
 
 	openai "github.com/sashabaranov/go-openai"
 )
 
-var store = sessions.NewCookieStore([]byte("something-secret"))
-
-func init() {
-	// Error saving session: securecookie:
-	// error - caused by: securecookie: error - caused by: gob: type not registered for interface: []openai.ChatCompletionMessage
-	gob.Register([]openai.ChatCompletionMessage{})
-	store.Options = &sessions.Options{
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		MaxAge: -1,
-	}
-}
-
 func sendingMessageHandler(w http.ResponseWriter, r *http.Request) {
-	session, err := store.Get(r, "chat-session")
-	if err != nil {
-		http.Error(w, "Error retrieving session", http.StatusInternalServerError)
-		return
-	}
 
 	userMessage := r.FormValue("userMessage")
-
 	if !containsKeywords(userMessage) {
 		data := struct {
 			Error string
@@ -46,28 +24,39 @@ func sendingMessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if session.IsNew {
-		session.ID = uuid.New().String()
-		session.Values["history"] = []openai.ChatCompletionMessage{}
-	}
-
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Error parsing form", http.StatusBadRequest)
 		return
 	}
 
 	var history []openai.ChatCompletionMessage
-	if h, ok := session.Values["history"].([]openai.ChatCompletionMessage); ok {
-		history = h
-	}
+	
+	cursor, err := db.Client.Database("Chat").Collection("history").Find(context.Background(), bson.M{})
+    if err != nil {
+        http.Error(w, "Failed to fetch chat history: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+	for cursor.Next(context.Background()) {
+        var histEntry History
+        if err = cursor.Decode(&histEntry); err != nil {
+            http.Error(w, "Failed to decode chat history: "+err.Error(), http.StatusInternalServerError)
+            return
+        }
+        history = append(history, openai.ChatCompletionMessage{
+            Role:    openai.ChatMessageRoleUser,
+            Content: histEntry.UserMessage,
+        }, openai.ChatCompletionMessage{
+            Role:    openai.ChatMessageRoleSystem,
+            Content: histEntry.GPTResponse,
+        })
+    }
 
-	userMsg := openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
-		Content: userMessage,
-	}
-	history = append(history, userMsg)
+	history = append(history, openai.ChatCompletionMessage{
+        Role:    openai.ChatMessageRoleUser,
+        Content: userMessage,
+    })
 
-	client := openai.NewClient("api-key")
+	client := openai.NewClient("api")
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
@@ -78,23 +67,26 @@ func sendingMessageHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		http.Error(w, "Failed to get response from AI", http.StatusInternalServerError)
-		fmt.Printf("ChatCompletion error: %v\n", err)
 		return
 	}
 
-	history = append(history, resp.Choices[0].Message)
+	aiResponse := resp.Choices[0].Message
+	history = append(history, aiResponse)
 
-	session.Values["history"] = history
-	if err = session.Save(r, w); err != nil {
-		http.Error(w, "Error saving session: "+err.Error(), http.StatusInternalServerError)
+	historyEntry := History{
+		UserMessage: userMessage,
+		GPTResponse: aiResponse.Content,
+	}
+	if _, err := db.Client.Database("Chat").Collection("history").InsertOne(context.Background(), historyEntry); err != nil {
+		http.Error(w, "Failed to save chat history: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	historyJson, err := json.Marshal(history)
-	if err != nil {
-		http.Error(w, "Error marshaling history", http.StatusInternalServerError)
-		return
-	}
+    if err != nil {
+        http.Error(w, "Error marshaling history", http.StatusInternalServerError)
+        return
+    }
 
 	data := struct {
 		UserMessage string
@@ -102,7 +94,7 @@ func sendingMessageHandler(w http.ResponseWriter, r *http.Request) {
 		History     string
 	}{
 		UserMessage: userMessage,
-		Response:    resp.Choices[0].Message.Content,
+		Response:    aiResponse.Content,
 		History:     string(historyJson),
 	}
 
